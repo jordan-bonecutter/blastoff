@@ -1,0 +1,21 @@
+[package]
+name = "blastoff"
+version = "0.1.0"
+edition = "2024"
+description = "A quiet, Spotlight-inspired application launcher for Linux"
+license = "MIT"
+
+[dependencies]
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "x11", "image-without-codecs", "svg", "thread-pool", "basic-shaping"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+

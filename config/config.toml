@@ -1,0 +1,11 @@
+# Copy to ~/.config/blastoff/config.toml. All settings are optional.
+width = 680.0
+max_results = 7
+font_size = 17.0
+radius = 20.0
+background = "#181b24"
+foreground = "#eef0f7"
+accent = "#a5b4fc"
+icon_theme = "Adwaita"
+terminal = ["foot", "-e"]
+close_on_unfocus = true
