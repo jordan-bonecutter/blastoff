@@ -39,10 +39,10 @@ def windows():
     return find(tree)
 
 
-def start():
+def start(*args, config="config.toml"):
     env = os.environ.copy()
     env.pop('DISPLAY', None)
-    return subprocess.Popen([binary, '--config', str(root / 'config.toml')], env=env,
+    return subprocess.Popen([binary, '--config', str(root / config), *args], env=env,
                             stdout=open(root / 'launcher.log', 'a'), stderr=subprocess.STDOUT)
 
 
@@ -75,7 +75,33 @@ try:
     backdrop = subprocess.Popen([os.environ['BLASTOFF_BACKDROP']], stdout=open(root / 'backdrop.log', 'w'), stderr=subprocess.STDOUT)
     time.sleep(2)
     assert backdrop.poll() is None, 'headless backdrop failed to start'
+    subprocess.run(['wl-copy', 'gma'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    # Repeat startup with a populated clipboard to expose connection-lifetime races.
+    for attempt in range(12):
+        initially_inside = attempt % 2 == 1
+        key('pointer:420,320' if initially_inside else 'pointer:0,0')
+        wait_for(lambda: not windows(), 'clipboard stress previous window removal')
+        proc = start('--button-launch')
+        wait_for(lambda: ((node := windows()) and node['window_rect']['width'] == 1280) or proc.poll() is not None,
+                 'clipboard stress overlay')
+        assert proc.poll() is None, 'button-launch failed with clipboard populated'
+        if attempt == 0:
+            time.sleep(0.4)
+            run('grim', str(root / '12-clipboard-startup.png'))
+            run(os.environ['BLASTOFF_CAPTURE_CHECK'], str(root / '12-clipboard-startup.png'), '300', '290', '680', '380')
+        time.sleep(0.2)
+        assert proc.poll() is None, 'startup with pointer already inside must stay open'
+        if initially_inside:
+            key('pointer:20,20')
+        else:
+            key('Escape')
+        wait_for(lambda: proc.poll() is not None, 'clipboard stress dismissal')
+        assert proc.returncode == 0
+        log = (root / 'launcher.log').read_text()
+        assert 'not a valid new object id' not in log and 'Invalid argument' not in log, 'Wayland clipboard protocol error'
+
     wait_for(lambda: not windows(), 'previous window removal')
+    key('pointer:0,0')
     proc = start()
     wait_for(windows, 'Wayland launcher window')
     capture('01-initial')
@@ -196,11 +222,72 @@ try:
     assert proc.returncode == 0
     key('pointer:0,0')
 
+    subprocess.run(['wl-copy', 'gma'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    # Button launches use a transparent screen-sized input surface. Moving
+    # outside before first entry (and the opening click's release) cannot close it.
+    (root / 'dismiss.toml').write_text('close_on_unfocus = true\nmax_results = 3\nicon_theme = "hicolor"\n')
+    for action in ['outside-click', 'enter-exit', 'escape', 'inside-click', 'search-launch', 'app-click', 'focus-switch']:
+        wait_for(lambda: not windows(), 'previous window removal')
+        key('pointer:0,0', 'pointer-press')
+        proc = start('--button-launch', config='dismiss.toml')
+        wait_for(lambda: (node := windows()) and node['window_rect']['width'] == 1280,
+                 'button-launch overlay')
+        time.sleep(0.5)
+        key('pointer-release', 'pointer:20,20')
+        assert proc.poll() is None, 'initial outside pointer motion must not dismiss'
+        if action == 'outside-click':
+            # Capture and check the centered panel against the unchanged backdrop.
+            run('grim', str(root / '11-button-launch.png'))
+            run(os.environ['BLASTOFF_CAPTURE_CHECK'], str(root / '11-button-launch.png'),
+                '300', '290', '680', '380')
+            key('click')
+        elif action == 'enter-exit':
+            key('pointer:420,320')
+            assert proc.poll() is None, 'pointer entry must keep launcher open'
+            key('pointer:20,20')
+        elif action == 'escape':
+            key('Escape')
+        elif action == 'search-launch':
+            (root / 'launched-gamma').unlink()
+            key('Paste', 'Return')
+            wait_for(lambda: (root / 'launched-gamma').exists(), 'button-launch clipboard paste focus and Enter')
+        elif action == 'focus-switch':
+            key('pointer:420,320')
+            run('swaymsg', '[app_id="blastoff-test-background"] focus')
+            time.sleep(0.3)
+            assert proc.poll() is None, 'focus switching with stationary pointer must keep launcher open'
+            run('swaymsg', f'[pid="{proc.pid}"] focus')
+            key('Escape')
+        elif action == 'app-click':
+            (root / 'launched-alpha').unlink()
+            key('pointer:420,472', 'click')
+            wait_for(lambda: (root / 'launched-alpha').exists(), 'button-launch click app')
+        else:
+            key('pointer:420,320', 'click')
+            assert proc.poll() is None, 'clicking search must keep launcher open'
+            key('Escape')
+        wait_for(lambda: proc.poll() is not None, 'button-launch ' + action)
+        assert proc.returncode == 0
+
+    assert 'not a valid new object id' not in (root / 'launcher.log').read_text(), 'Wayland clipboard protocol error'
+    assert 'Invalid argument' not in (root / 'launcher.log').read_text(), 'Wayland connection failure'
+
+    # Default mode still respects close_on_unfocus, including pointer focus changes.
+    wait_for(lambda: not windows(), 'previous window removal')
+    proc = start(config='dismiss.toml')
+    wait_for(windows, 'default dismissal window')
+    key('pointer:420,320')
+    assert proc.poll() is None
+    key('pointer:20,20')
+    wait_for(lambda: proc.poll() is not None, 'default focus-loss dismissal')
+    assert proc.returncode == 0
+
     images = [(root / (name + '.png')).read_bytes() for name in ['01-initial', '02-fuzzy', '03-no-matches', '04-launch-error']]
     assert (root / '00-down.png').read_bytes() != images[0], 'selection must visibly move'
     assert all(len(data) > 5000 for data in images), 'screenshots must contain rendered UI'
     assert len(set(images)) == 4, 'UI screenshots must change with the application state'
-    (root / 'result').write_text('PASS: native Wayland rendering, borderless alpha pixels, hover/Enter selection, keyboard after hover, scrolling all apps and search matches, clamped navigation, query reset, fuzzy search, launch, empty results, Escape, launch error.\n')
+    (root / 'result').write_text('PASS: clipboard startup stress inside/outside, paste, focus switch, button-launch outside click, enter/exit, Escape, inside click, search/Enter and app click, default focus dismissal, native Wayland rendering, borderless alpha pixels, hover/Enter selection, keyboard after hover, scrolling all apps and search matches, clamped navigation, query reset, fuzzy search, launch, empty results, Escape, launch error.\n')
 except Exception:
     import traceback
     (root / 'result').write_text(traceback.format_exc())

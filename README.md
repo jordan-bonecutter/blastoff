@@ -10,6 +10,8 @@ cargo run --release --locked
 
 Type an app name or abbreviation (`vsc` matches Visual Studio Code). Use **↑/↓** to select and scroll through all matches; navigation stops at the first and last result. Press **Enter** to open the highlighted row, and **Escape** to dismiss. Moving the pointer over a result selects it, so Enter launches that same highlighted app. Arrow keys take over selection when used; scrolling does not reselect a row under a stationary pointer. Click a result to launch it. The window also closes when it loses focus by default. A failed launch shows an error and keeps the launcher open.
 
+For a desktop or panel button, run `blastoff --button-launch`. It stays open while the pointer starts outside the panel, then dismisses on an outside click, after the pointer enters and leaves the panel, or on Escape. This mode overrides `close_on_unfocus` and uses a transparent window covering the current monitor to catch outside clicks; the centered panel keeps its configured size and appearance. The dismissal click is consumed by Blastoff. Other monitors are outside this input surface. Without the flag, focus-loss behavior is unchanged.
+
 Install with `cargo install --path . --locked`. Add these rules to your Sway config, using the full installed binary path in the binding if needed:
 
 ```sway
@@ -45,7 +47,7 @@ Applications come from XDG `applications` directories. User entries override sys
 
 ## Rust dependencies and the OS boundary
 
-Application code, UI, text layout, GPU rendering, SVG rendering, and enabled bitmap decoders use Rust crates. Iced defaults are disabled; the `wgpu-bare` feature enables GPU rendering with only the Vulkan backend, Linux theme detection is disabled, and image codecs are explicitly selected. Iced's Linux window/input/clipboard backends still call system Wayland/X11, `libxkbcommon`, and Vulkan driver libraries. “Rust UI, no GTK” does **not** mean “no native system libraries”: if every dependency must avoid FFI entirely, this implementation does not meet that stricter constraint. The graphics driver is supplied by the OS, not bundled or compiled as an application dependency.
+Application code, UI, text layout, GPU rendering, SVG rendering, and enabled bitmap decoders use Rust crates. A small local patch to `clipboard_wayland` shares a clipboard worker across windows on the same Wayland display, avoiding invalid clipboard offers during button-launch window replacement. It retains the existing backend and dependencies. Iced defaults are disabled; the `wgpu-bare` feature enables GPU rendering with only the Vulkan backend, Linux theme detection is disabled, and image codecs are explicitly selected. Iced's Linux window/input/clipboard backends still call system Wayland/X11, `libxkbcommon`, and Vulkan driver libraries. “Rust UI, no GTK” does **not** mean “no native system libraries”: if every dependency must avoid FFI entirely, this implementation does not meet that stricter constraint. The graphics driver is supplied by the OS, not bundled or compiled as an application dependency.
 
 Implementation references: [Iced feature flags](https://docs.rs/crate/iced/0.14.0/features), [Iced window settings](https://docs.rs/iced/0.14.0/iced/window/struct.Settings.html), and the [desktop Exec specification](https://specifications.freedesktop.org/desktop-entry/latest/exec-variables.html).
 
@@ -60,7 +62,7 @@ cargo clippy --locked --all-targets -- -D warnings
 ./tests/headless-ui.sh
 ```
 
-The UI harness requires a working Vulkan adapter in addition to `sway` built with the headless wlroots backend, `swaymsg`, `grim`, Python 3, `timeout`, and the system XKB keymap files (usually `xkeyboard-config`). Sway must support the virtual-keyboard and virtual-pointer protocols. These are **test tools**, not application dependencies. It does not require Xvfb, Xwayland, or a physical display. On machines without a GPU, install Mesa Lavapipe (Arch: `vulkan-swrast`), then run:
+The UI harness requires a working Vulkan adapter in addition to `sway` built with the headless wlroots backend, `swaymsg`, `grim`, `wl-copy` (wl-clipboard), Python 3, `timeout`, and the system XKB keymap files (usually `xkeyboard-config`). Sway must support the virtual-keyboard and virtual-pointer protocols. These are **test tools**, not application dependencies. It does not require Xvfb, Xwayland, or a physical display. On machines without a GPU, install Mesa Lavapipe (Arch: `vulkan-swrast`), then run:
 
 ```sh
 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./tests/headless-ui.sh
@@ -70,7 +72,7 @@ Use the ICD path for your distro if it differs. Lavapipe emulates the Vulkan ada
 
 The script builds Blastoff and test-only Rust virtual-keyboard/pointer, backdrop, and screenshot-check helpers, creates an isolated `/tmp/blastoff-ui.*` directory, replaces the XDG data/config/runtime directories, unsets the existing display/socket variables, and starts Sway with `WLR_BACKENDS=headless` and `WLR_RENDERER=pixman`. The compositor uses pixman while the launcher and backdrop use wgpu/Vulkan. It supplies deterministic desktop entries whose launch commands only create marker files. The input helper refuses to run unless `SWAYSOCK` belongs to that test directory.
 
-Checks cover native Wayland window rendering, automatic search focus, Up/Down navigation with clamped ends, scrolling beyond the visible rows (both apps and search results), query scroll reset, and Enter launch, fuzzy search, Enter with no matches, Escape dismissal, and launch errors. A blue backdrop and pixel checks verify actual alpha blending, transparent rounded corners, and absence of black margins or a panel outline. Tests also verify Enter launches the hovered row and keyboard scrolling retains selection with a stationary pointer. The script exits nonzero on failure, limits the compositor to 90 seconds, and prints the artifact directory. Inspect `result`, `sway.log`, `launcher.log`, `input.log`, `backdrop.log`, and these screenshots:
+Checks cover native Wayland window rendering, automatic search focus, Up/Down navigation with clamped ends, scrolling beyond the visible rows (both apps and search results), query scroll reset, and Enter launch, fuzzy search, Enter with no matches, Escape dismissal, and launch errors. A blue backdrop and pixel checks verify actual alpha blending, transparent rounded corners, and absence of black margins or a panel outline. Twelve repeated button launches exercise startup with a populated clipboard and the pointer initially inside or outside the panel. Paste/Enter verifies that the clipboard remains usable. Switching focus to another window with a stationary pointer must keep button-launch mode open. A clipboard fixture stays populated during button launches, and launcher logs must contain no Wayland protocol errors. Tests also verify button-launch dismissal by outside click, pointer entry/exit, and Escape, clicks inside search staying open, search/Enter and app clicks in button-launch mode, and default focus-loss dismissal. Enter launches the hovered row and keyboard scrolling retains selection with a stationary pointer. The script exits nonzero on failure, limits the compositor to 120 seconds, and prints the artifact directory. Inspect `result`, `sway.log`, `launcher.log`, `input.log`, `backdrop.log`, and these screenshots:
 
 - `01-initial.png`: icon rows and selection.
 - `00-down.png`: selection after keyboard navigation.
@@ -83,5 +85,7 @@ Checks cover native Wayland window rendering, automatic search focus, Up/Down na
 - `08-query-reset.png`: a new query resets the scrolled viewport.
 - `09-hover-selection.png`: hovering Beta selects the target launched by Enter.
 - `10-keyboard-after-hover.png`: keyboard navigation scrolls to Gamma with the pointer stationary.
+- `11-button-launch.png`: centered panel with a transparent input surface across the monitor.
+- `12-clipboard-startup.png`: the same appearance during startup with a populated clipboard.
 
 Open screenshots with a file/image viewer; do not rerun the application on a live desktop for visual review. Artifacts are kept for inspection. The harness also requires distinct screenshots across states to catch stale rendering. Functional checks assert behavior; screenshot appearance needs visual inspection. This harness covers Wayland; the X11 backend is compiled but is not exercised by it. See [AGENTS.md](AGENTS.md) for persistent agent instructions.

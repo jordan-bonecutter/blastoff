@@ -20,3 +20,7 @@ strip = true
 wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+# Reuse Wayland clipboard workers across Iced window replacement.
+[patch.crates-io]
+clipboard_wayland = { path = "vendor/clipboard_wayland" }

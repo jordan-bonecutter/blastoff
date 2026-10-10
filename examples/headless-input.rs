@@ -8,7 +8,7 @@ use std::{
 use wayland_client::{
     Connection, Dispatch, QueueHandle, delegate_noop,
     globals::{GlobalListContents, registry_queue_init},
-    protocol::{wl_registry, wl_seat},
+    protocol::{wl_pointer, wl_registry, wl_seat},
 };
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
@@ -41,6 +41,7 @@ fn code(key: &str) -> u32 {
         "Up" => 103,
         "Return" => 28,
         "Escape" => 1,
+        "Paste" => 47,
         "BackSpace" => 14,
         "space" => 57,
         _ => {
@@ -118,16 +119,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
+            if arg == "pointer-press" || arg == "pointer-release" {
+                let state = if arg == "pointer-press" {
+                    wl_pointer::ButtonState::Pressed
+                } else {
+                    wl_pointer::ButtonState::Released
+                };
+                pointer.button(0, 0x110, state);
+                pointer.frame();
+                queue.roundtrip(&mut State)?;
+                continue;
+            }
+            if arg == "click" {
+                pointer.button(0, 0x110, wl_pointer::ButtonState::Pressed);
+                pointer.frame();
+                queue.roundtrip(&mut State)?;
+                std::thread::sleep(Duration::from_millis(60));
+                pointer.button(0, 0x110, wl_pointer::ButtonState::Released);
+                pointer.frame();
+                queue.roundtrip(&mut State)?;
+                continue;
+            }
             let keys: Vec<String> = if let Some(value) = arg.strip_prefix("text:") {
                 value.chars().map(|c| c.to_string()).collect()
             } else {
                 vec![arg.to_owned()]
             };
             for key in keys {
+                if key == "Paste" {
+                    keyboard.modifiers(0, 4, 0, 0);
+                }
                 keyboard.key(0, code(&key), 1);
                 queue.roundtrip(&mut State)?;
                 std::thread::sleep(Duration::from_millis(60));
                 keyboard.key(0, code(&key), 0);
+                if key == "Paste" {
+                    keyboard.modifiers(0, 0, 0, 0);
+                }
                 queue.roundtrip(&mut State)?;
                 std::thread::sleep(Duration::from_millis(60));
             }

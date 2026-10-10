@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-for tool in sway swaymsg grim python3 timeout; do
+for tool in sway swaymsg grim wl-copy python3 timeout; do
     command -v "$tool" >/dev/null || { echo "Missing test dependency: $tool" >&2; exit 1; }
 done
 cargo build --locked --bin blastoff --example headless-input --example check-capture --example headless-backdrop
@@ -58,7 +58,7 @@ export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
 export SWAYSOCK="$BLASTOFF_TEST_DIR/sway.sock"
 printf 'Headless UI artifacts: %s\n' "$BLASTOFF_TEST_DIR"
 # timeout also stops a compositor if the driver fails to start.
-timeout 90s sway -c "$BLASTOFF_TEST_DIR/sway.conf" > "$BLASTOFF_TEST_DIR/sway.log" 2>&1 || {
+timeout 120s sway -c "$BLASTOFF_TEST_DIR/sway.conf" > "$BLASTOFF_TEST_DIR/sway.log" 2>&1 || {
     cat "$BLASTOFF_TEST_DIR/sway.log" >&2
     exit 1
 }
