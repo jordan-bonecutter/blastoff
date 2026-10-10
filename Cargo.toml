@@ -6,7 +6,8 @@ description = "A quiet, Spotlight-inspired application launcher for Linux"
 license = "MIT"
 
 [dependencies]
-iced = { version = "0.14", default-features = false, features = ["tiny-skia", "wayland", "x11", "image-without-codecs", "svg", "thread-pool", "basic-shaping"] }
+iced = { version = "0.14", default-features = false, features = ["wgpu-bare", "wayland", "x11", "image-without-codecs", "svg", "thread-pool", "basic-shaping"] }
+wgpu = { version = "27", default-features = false, features = ["std", "vulkan", "wgsl"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"

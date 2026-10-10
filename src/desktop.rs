@@ -358,10 +358,10 @@ impl App {
             .map_err(|e| format!("Could not launch {}: {e}", self.name))
     }
 }
-pub fn rank(apps: &[App], query: &str, limit: usize) -> Vec<usize> {
+pub fn rank(apps: &[App], query: &str) -> Vec<usize> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
-        return (0..apps.len().min(limit)).collect();
+        return (0..apps.len()).collect();
     }
     let mut hits: Vec<_> = apps
         .iter()
@@ -378,7 +378,6 @@ pub fn rank(apps: &[App], query: &str, limit: usize) -> Vec<usize> {
         })
         .collect();
     hits.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    hits.truncate(limit);
     hits.into_iter().map(|(i, _)| i).collect()
 }
 fn score(haystack: &str, query: &str) -> Option<i32> {
@@ -501,6 +500,6 @@ mod tests {
             a.name = "Test".into();
             a
         }];
-        assert_eq!(rank(&apps, "test", 5), vec![1, 0]);
+        assert_eq!(rank(&apps, "test"), vec![1, 0]);
     }
 }

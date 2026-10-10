@@ -3,7 +3,9 @@ mod desktop;
 
 use config::{Config, parse_color};
 use desktop::App;
-use iced::widget::{button, column, container, image, row, rule, space, svg, text, text_input};
+use iced::widget::{
+    button, column, container, image, row, rule, scrollable, space, svg, text, text_input,
+};
 use iced::{
     Alignment, Background, Border, Color, Element, Length, Subscription, Task, Theme, event,
     keyboard, window,
@@ -17,6 +19,7 @@ enum Message {
     Click(usize),
     Close,
     Focus(bool),
+    Scrolled(scrollable::Viewport),
 }
 struct Launcher {
     config: Config,
@@ -26,11 +29,12 @@ struct Launcher {
     selected: usize,
     error: Option<String>,
     has_focused: bool,
+    scroll_offset: f32,
 }
 impl Launcher {
     fn boot(config: Config) -> (Self, Task<Message>) {
         let apps = desktop::discover(&config);
-        let results = desktop::rank(&apps, "", config.max_results);
+        let results = desktop::rank(&apps, "");
         (
             Self {
                 config,
@@ -40,6 +44,7 @@ impl Launcher {
                 selected: 0,
                 error: None,
                 has_focused: false,
+                scroll_offset: 0.0,
             },
             iced::widget::operation::focus("search"),
         )
@@ -48,17 +53,36 @@ impl Launcher {
         match message {
             Message::Query(query) => {
                 self.query = query;
-                self.results = desktop::rank(&self.apps, &self.query, self.config.max_results);
+                self.results = desktop::rank(&self.apps, &self.query);
                 self.selected = 0;
                 self.error = None;
+                self.scroll_offset = 0.0;
+                return iced::widget::operation::scroll_to(
+                    "results",
+                    scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+                );
             }
             Message::Move(delta) => {
                 if !self.results.is_empty() {
-                    self.selected = (self.selected as i32 + delta)
-                        .rem_euclid(self.results.len() as i32)
-                        as usize;
+                    self.selected = self
+                        .selected
+                        .saturating_add_signed(delta as isize)
+                        .min(self.results.len() - 1);
+                    let height = self.config.max_results as f32 * 70.0
+                        - 8.0
+                        - if self.error.is_some() { 32.0 } else { 0.0 };
+                    self.scroll_offset =
+                        selection_offset(self.selected, self.scroll_offset, height);
+                    return iced::widget::operation::scroll_to(
+                        "results",
+                        scrollable::AbsoluteOffset {
+                            x: 0.0,
+                            y: self.scroll_offset,
+                        },
+                    );
                 }
             }
+            Message::Scrolled(viewport) => self.scroll_offset = viewport.absolute_offset().y,
             Message::Click(index) => {
                 self.selected = index;
                 return self.update(Message::Launch);
@@ -100,7 +124,10 @@ impl Launcher {
         })
     }
     fn view(&self) -> Element<'_, Message> {
-        let bg = parse_color(&self.config.background).unwrap();
+        let bg = Color {
+            a: self.config.opacity,
+            ..parse_color(&self.config.background).unwrap()
+        };
         let fg = parse_color(&self.config.foreground).unwrap();
         let accent = parse_color(&self.config.accent).unwrap();
         let muted = Color { a: 0.5, ..fg };
@@ -120,8 +147,7 @@ impl Launcher {
             });
         let header = row![
             svg(svg::Handle::from_memory(br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="13" cy="13" r="8" fill="none" stroke="#a5b4fc" stroke-width="2.2"/><path d="M19 19L27 27" fill="none" stroke="#a5b4fc" stroke-width="2.2" stroke-linecap="round"/></svg>"##.as_slice())).width(30).height(30).style(move |_, _| svg::Style { color: Some(accent) }),
-            search,
-            text("esc").size(12).color(muted)
+            search
         ]
         .spacing(16)
         .align_y(Alignment::Center);
@@ -224,10 +250,7 @@ impl Launcher {
                         "No matches"
                     })
                     .size(20)
-                    .color(fg),
-                    text("Try a different app name or keyword")
-                        .size(13)
-                        .color(muted)
+                    .color(fg)
                 ]
                 .spacing(8)
                 .align_x(Alignment::Center),
@@ -235,7 +258,17 @@ impl Launcher {
             .center(Length::Fill)
             .into()
         } else {
-            entries.into()
+            scrollable(entries)
+                .id("results")
+                .height(Length::Fill)
+                .direction(scrollable::Direction::Vertical(
+                    scrollable::Scrollbar::new()
+                        .width(6)
+                        .scroller_width(4)
+                        .spacing(8),
+                ))
+                .on_scroll(Message::Scrolled)
+                .into()
         };
         let mut body = column![
             header,
@@ -247,14 +280,7 @@ impl Launcher {
         if let Some(error) = &self.error {
             body = body.push(text(error).size(12).color(Color::from_rgb8(255, 150, 150)));
         }
-        let footer = row![
-            text("↑ ↓  Navigate").size(11).color(muted),
-            text("↵  Open").size(11).color(muted),
-            space::horizontal(),
-            text("BLASTOFF").size(10).color(accent)
-        ]
-        .spacing(20);
-        let panel = container(body.push(rule::horizontal(1)).push(footer))
+        let panel = container(body)
             .padding(24)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -268,11 +294,7 @@ impl Launcher {
                 },
                 ..Default::default()
             });
-        container(panel)
-            .padding(24)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        panel.into()
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -300,10 +322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    let size = iced::Size::new(
-        config.width + 48.0,
-        234.0 + config.max_results as f32 * 70.0,
-    );
+    let size = iced::Size::new(config.width, 170.0 + config.max_results as f32 * 70.0);
     iced::application(
         move || Launcher::boot(config.clone()),
         Launcher::update,
@@ -331,4 +350,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .run()?;
     Ok(())
+}
+
+/// Keep the full selected row visible without moving a viewport that already contains it.
+fn selection_offset(selected: usize, offset: f32, height: f32) -> f32 {
+    let top = selected as f32 * 70.0;
+    if top < offset {
+        top
+    } else {
+        offset.max(top + 66.0 - height).max(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn selection_scrolls_only_when_row_leaves_viewport() {
+        assert_eq!(selection_offset(0, 0.0, 206.0), 0.0);
+        assert_eq!(selection_offset(2, 0.0, 206.0), 0.0);
+        assert_eq!(selection_offset(3, 0.0, 206.0), 70.0);
+        assert_eq!(selection_offset(1, 140.0, 206.0), 70.0);
+        assert_eq!(selection_offset(0, 70.0, 206.0), 0.0);
+    }
 }

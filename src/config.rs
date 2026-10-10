@@ -8,6 +8,7 @@ pub struct Config {
     pub max_results: usize,
     pub font_size: f32,
     pub radius: f32,
+    pub opacity: f32,
     pub background: String,
     pub foreground: String,
     pub accent: String,
@@ -22,6 +23,7 @@ impl Default for Config {
             max_results: 7,
             font_size: 17.0,
             radius: 20.0,
+            opacity: 0.92,
             background: "#181b24".into(),
             foreground: "#eef0f7".into(),
             accent: "#a5b4fc".into(),
@@ -51,9 +53,10 @@ impl Config {
             || !(1..=12).contains(&config.max_results)
             || !(12.0..=28.0).contains(&config.font_size)
             || !(0.0..=40.0).contains(&config.radius)
+            || !(0.0..=1.0).contains(&config.opacity)
         {
             return Err(
-                "width must be 400–1400, max_results 1–12, font_size 12–28, radius 0–40".into(),
+                "width must be 400–1400, max_results 1–12, font_size 12–28, radius 0–40, opacity 0–1".into(),
             );
         }
         for value in [&config.background, &config.foreground, &config.accent] {

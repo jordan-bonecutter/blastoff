@@ -29,7 +29,13 @@ def wait_for(predicate, label, timeout=15):
 def windows():
     tree = json.loads(run('swaymsg', '-t', 'get_tree', '-r'))
     def find(node):
-        return node.get('app_id') == 'blastoff' or any(find(n) for n in node.get('nodes', []) + node.get('floating_nodes', []))
+        if node.get('app_id') == 'blastoff':
+            return node
+        for child in node.get('nodes', []) + node.get('floating_nodes', []):
+            found = find(child)
+            if found:
+                return found
+        return None
     return find(tree)
 
 
@@ -54,25 +60,75 @@ def type_text(value):
 
 def capture(name):
     time.sleep(0.4)
-    run('grim', str(root / (name + '.png')))
+    path = str(root / (name + '.png'))
+    run('grim', path)
+    node = windows()
+    rect = node['rect']
+    content = node['window_rect']
+    run(os.environ['BLASTOFF_CAPTURE_CHECK'], path, str(rect['x'] + content['x']), str(rect['y'] + content['y']), str(content['width']), str(content['height']))
 
 
 try:
     assert os.environ.get('SWAYSOCK', '').startswith(str(root) + '/')
     keyboard = subprocess.Popen([os.environ['BLASTOFF_INPUT']], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(root / 'input.log', 'w'), text=True)
     assert keyboard.stdout.readline().strip() == 'READY', 'virtual keyboard initialization failed'
+    backdrop = subprocess.Popen([os.environ['BLASTOFF_BACKDROP']], stdout=open(root / 'backdrop.log', 'w'), stderr=subprocess.STDOUT)
+    time.sleep(2)
+    assert backdrop.poll() is None, 'headless backdrop failed to start'
     wait_for(lambda: not windows(), 'previous window removal')
     proc = start()
     wait_for(windows, 'Wayland launcher window')
     capture('01-initial')
     assert proc.poll() is None
     # Down selects Beta; launching proves navigation and initial input focus.
-    key('Up', 'Down', 'Down')
+    key('Up', 'Down')
     capture('00-down')
     key('Return')
     wait_for(lambda: (root / 'launched-beta').exists(), 'Beta launch from Down/Enter')
     wait_for(lambda: proc.poll() is not None, 'launcher exit after launch')
     assert proc.returncode == 0
+
+    # More entries than visible rows must remain accessible, with clamped ends.
+    wait_for(lambda: not windows(), 'previous window removal')
+    proc = start()
+    wait_for(windows, 'scrolling window')
+    key(*(['Down'] * 20))
+    capture('05-scroll-bottom')
+    key('Down', 'Return')
+    wait_for(lambda: (root / 'launched-omega').exists(), 'last app beyond visible rows, without wrapping')
+    wait_for(lambda: proc.poll() is not None, 'bottom launcher exit')
+
+    wait_for(lambda: not windows(), 'previous window removal')
+    proc = start()
+    wait_for(windows, 'scroll reset window')
+    key(*(['Down'] * 20))
+    key(*(['Up'] * 20))
+    capture('06-scroll-top')
+    key('Up', 'Return')
+    wait_for(lambda: (root / 'launched-alpha').exists(), 'scroll back to first app, without wrapping')
+    wait_for(lambda: proc.poll() is not None, 'top launcher exit')
+
+    (root / 'launched-omega').unlink()
+    wait_for(lambda: not windows(), 'previous window removal')
+    proc = start()
+    wait_for(windows, 'scrolling search window')
+    type_text('app')
+    key(*(['Down'] * 20))
+    capture('07-search-scroll')
+    key('Return')
+    wait_for(lambda: (root / 'launched-epsilon').exists(), 'last search match beyond visible rows')
+    wait_for(lambda: proc.poll() is not None, 'search scrolling launcher exit')
+
+    wait_for(lambda: not windows(), 'previous window removal')
+    proc = start()
+    wait_for(windows, 'query reset window')
+    key(*(['Down'] * 20))
+    type_text('gma')
+    capture('08-query-reset')
+    key('Return')
+    wait_for(lambda: (root / 'launched-gamma').exists(), 'query resets scrolled selection and viewport')
+    wait_for(lambda: proc.poll() is not None, 'query reset launcher exit')
+    (root / 'launched-gamma').unlink()
 
     wait_for(lambda: not windows(), 'previous window removal')
     proc = start()
@@ -109,7 +165,7 @@ try:
     assert (root / '00-down.png').read_bytes() != images[0], 'selection must visibly move'
     assert all(len(data) > 5000 for data in images), 'screenshots must contain rendered UI'
     assert len(set(images)) == 4, 'UI screenshots must change with the application state'
-    (root / 'result').write_text('PASS: native Wayland rendering, navigation, fuzzy search, launch, empty results, Escape, launch error.\n')
+    (root / 'result').write_text('PASS: native Wayland rendering, border pixels, scrolling all apps and search matches, clamped navigation, query reset, fuzzy search, launch, empty results, Escape, launch error.\n')
 except Exception:
     import traceback
     (root / 'result').write_text(traceback.format_exc())
