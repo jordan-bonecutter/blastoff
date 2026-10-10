@@ -322,7 +322,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let config = Config::load(&path)?;
     if list {
-        for app in desktop::discover(&config) {
+        for app in desktop::discover_entries() {
             println!("{}\t{}", app.id, app.name);
         }
         return Ok(());

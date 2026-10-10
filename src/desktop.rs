@@ -31,17 +31,30 @@ pub fn data_dirs() -> Vec<PathBuf> {
     dirs
 }
 fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    walk_matching(dir, depth, out, &|_| true);
+}
+fn walk_matching(
+    dir: &Path,
+    depth: usize,
+    out: &mut Vec<PathBuf>,
+    matches: &impl Fn(&Path) -> bool,
+) {
     if depth == 0 {
         return;
     }
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
-    let mut entries: Vec<_> = entries.flatten().collect();
+    // Filter before allocating paths and sorting whole themes. Keep directories
+    // so icons in nonstandard theme layouts still work.
+    let mut entries: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) || matches(Path::new(&e.file_name())))
+        .collect();
     entries.sort_by_key(|e| e.path());
     for e in entries {
         if e.file_type().is_ok_and(|t| t.is_dir()) {
-            walk(&e.path(), depth - 1, out);
+            walk_matching(&e.path(), depth - 1, out, matches);
         } else {
             out.push(e.path());
         }
@@ -144,7 +157,7 @@ fn executable_exists(name: &str) -> bool {
             .any(|p| executable(&p.join(name)))
     }
 }
-pub fn discover(config: &Config) -> Vec<App> {
+pub fn discover_entries() -> Vec<App> {
     let desktops: Vec<_> = env::var("XDG_CURRENT_DESKTOP")
         .unwrap_or_default()
         .split(':')
@@ -176,7 +189,17 @@ pub fn discover(config: &Config) -> Vec<App> {
             }
         }
     }
-    let icons = icon_index(&config.icon_theme);
+    apps.sort_by_cached_key(|a| a.name.to_lowercase());
+    apps
+}
+pub fn discover(config: &Config) -> Vec<App> {
+    let mut apps = discover_entries();
+    let wanted = apps
+        .iter()
+        .map(|app| app.icon.as_str())
+        .filter(|icon| !icon.is_empty() && !Path::new(icon).is_absolute())
+        .collect();
+    let icons = icon_index(&config.icon_theme, wanted);
     for app in &mut apps {
         let p = PathBuf::from(&app.icon);
         app.icon_path = if p.is_absolute() && p.is_file() {
@@ -185,23 +208,33 @@ pub fn discover(config: &Config) -> Vec<App> {
             icons.get(&app.icon).cloned()
         };
     }
-    apps.sort_by_cached_key(|a| a.name.to_lowercase());
     apps
 }
-fn icon_index(theme: &str) -> HashMap<String, PathBuf> {
+fn icon_index(theme: &str, wanted: HashSet<&str>) -> HashMap<String, PathBuf> {
     let mut roots = vec![home().join(".icons")];
     roots.extend(data_dirs().into_iter().map(|p| p.join("icons")));
+    icon_index_in(theme, &roots, &data_dirs(), wanted)
+}
+fn icon_index_in(
+    theme: &str,
+    roots: &[PathBuf],
+    data_roots: &[PathBuf],
+    mut wanted: HashSet<&str>,
+) -> HashMap<String, PathBuf> {
     let mut themes = vec![theme.to_owned()];
     let mut visited = HashSet::new();
     let mut icons = HashMap::new();
     let mut i = 0;
-    while i < themes.len() && i < 32 {
+    while i < themes.len() && i < 32 && !wanted.is_empty() {
         let name = themes[i].clone();
         i += 1;
         if !visited.insert(name.clone()) {
+            if i == themes.len() && !visited.contains("hicolor") {
+                themes.push("hicolor".into());
+            }
             continue;
         }
-        for root in &roots {
+        for root in roots {
             let dir = root.join(&name);
             if let Ok(s) = fs::read_to_string(dir.join("index.theme")) {
                 for line in s.lines() {
@@ -217,7 +250,11 @@ fn icon_index(theme: &str) -> HashMap<String, PathBuf> {
                 }
             }
             let mut paths = vec![];
-            walk(&dir, 6, &mut paths);
+            walk_matching(&dir, 6, &mut paths, &|p| {
+                p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| wanted.contains(name))
+            });
             // Prefer scalable and 48/64px app artwork over tiny symbolic variants.
             paths.sort_by_key(|p| {
                 let s = p.to_string_lossy();
@@ -232,17 +269,29 @@ fn icon_index(theme: &str) -> HashMap<String, PathBuf> {
             for p in paths {
                 add_icon(&mut icons, p);
             }
+            wanted.retain(|name| !icons.contains_key(*name));
+            if wanted.is_empty() {
+                return icons;
+            }
         }
         if i == themes.len() && !visited.contains("hicolor") {
             themes.push("hicolor".into());
         }
     }
-    for dir in data_dirs() {
+    for dir in data_roots {
+        if wanted.is_empty() {
+            break;
+        }
         let mut paths = vec![];
-        walk(&dir.join("pixmaps"), 2, &mut paths);
+        walk_matching(&dir.join("pixmaps"), 2, &mut paths, &|p| {
+            p.file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|name| wanted.contains(name))
+        });
         for p in paths {
             add_icon(&mut icons, p);
         }
+        wanted.retain(|name| !icons.contains_key(*name));
     }
     icons
 }
@@ -421,6 +470,66 @@ mod tests {
             &[],
         )
         .unwrap()
+    }
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let path = env::temp_dir().join(format!(
+                "blastoff-icons-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn file(&self, path: &str, content: &str) -> PathBuf {
+            let path = self.0.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, content).unwrap();
+            path
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    #[test]
+    fn targeted_icons_preserve_theme_root_size_and_fallback_priority() {
+        let fixture = Fixture::new();
+        fixture.file("user/Preferred/index.theme", "Inherits=Parent,Preferred\n");
+        fixture.file("user/Parent/index.theme", "Inherits=Preferred\n");
+        fixture.file("user/Preferred/16x16/apps/editor.png", "");
+        let editor = fixture.file("user/Preferred/scalable/apps/editor.svg", "");
+        fixture.file("system/Preferred/scalable/apps/editor.svg", "");
+        fixture.file("user/Parent/scalable/apps/editor.svg", "");
+        let inherited = fixture.file("user/Parent/custom/layout/inherited.png", "");
+        let fallback = fixture.file("system/hicolor/48x48/apps/fallback.png", "");
+        let pixmap = fixture.file("data/pixmaps/pixmap.jpg", "");
+        fixture.file("user/Preferred/scalable/apps/unused.svg", "");
+        fixture.file("user/Preferred/scalable/apps/unsupported.gif", "");
+        let roots = [fixture.0.join("user"), fixture.0.join("system")];
+        let data_roots = [fixture.0.join("data")];
+        let icons = icon_index_in(
+            "Preferred",
+            &roots,
+            &data_roots,
+            HashSet::from([
+                "editor",
+                "inherited",
+                "fallback",
+                "pixmap",
+                "missing",
+                "unsupported",
+            ]),
+        );
+        assert_eq!(icons.len(), 4);
+        assert_eq!(icons["editor"], editor);
+        assert_eq!(icons["inherited"], inherited);
+        assert_eq!(icons["fallback"], fallback);
+        assert_eq!(icons["pixmap"], pixmap);
+        assert!(icon_index_in("Preferred", &roots, &data_roots, HashSet::new()).is_empty());
     }
     #[test]
     fn exec_fields_and_quoted_paths() {
