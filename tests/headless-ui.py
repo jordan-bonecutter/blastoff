@@ -161,11 +161,46 @@ try:
     key('Escape')
     wait_for(lambda: proc.poll() is not None, 'error window dismissal')
 
+    # Pointer selection and Enter must share one launch target.
+    (root / 'launched-beta').unlink()
+    wait_for(lambda: not windows(), 'previous window removal')
+    proc = start()
+    wait_for(windows, 'hover launch window')
+    node = windows()
+    rect, content = node['rect'], node['window_rect']
+    x = rect['x'] + content['x'] + 120
+    y = rect['y'] + content['y'] + 150 + 70 + 33
+    key(f'pointer:{x},{y}')
+    capture('09-hover-selection')
+    key('Return')
+    wait_for(lambda: (root / 'launched-beta').exists(), 'Enter launches hovered Beta rather than initial Alpha')
+    wait_for(lambda: proc.poll() is not None, 'hover launcher exit')
+    assert proc.returncode == 0
+
+    key('pointer:0,0')
+    (root / 'launched-gamma').unlink()
+    wait_for(lambda: not windows(), 'previous window removal')
+    proc = start()
+    wait_for(windows, 'keyboard after hover window')
+    node = windows()
+    rect, content = node['rect'], node['window_rect']
+    x = rect['x'] + content['x'] + 120
+    y = rect['y'] + content['y'] + 150 + 33
+    key(f'pointer:{x},{y}')
+    # Gamma is seventh: scrolling must not reselect a row beneath the stationary pointer.
+    key(*(['Down'] * 6))
+    capture('10-keyboard-after-hover')
+    key('Return')
+    wait_for(lambda: (root / 'launched-gamma').exists(), 'keyboard scrolling retains selection under stationary pointer')
+    wait_for(lambda: proc.poll() is not None, 'keyboard after hover launcher exit')
+    assert proc.returncode == 0
+    key('pointer:0,0')
+
     images = [(root / (name + '.png')).read_bytes() for name in ['01-initial', '02-fuzzy', '03-no-matches', '04-launch-error']]
     assert (root / '00-down.png').read_bytes() != images[0], 'selection must visibly move'
     assert all(len(data) > 5000 for data in images), 'screenshots must contain rendered UI'
     assert len(set(images)) == 4, 'UI screenshots must change with the application state'
-    (root / 'result').write_text('PASS: native Wayland rendering, border pixels, scrolling all apps and search matches, clamped navigation, query reset, fuzzy search, launch, empty results, Escape, launch error.\n')
+    (root / 'result').write_text('PASS: native Wayland rendering, borderless alpha pixels, hover/Enter selection, keyboard after hover, scrolling all apps and search matches, clamped navigation, query reset, fuzzy search, launch, empty results, Escape, launch error.\n')
 except Exception:
     import traceback
     (root / 'result').write_text(traceback.format_exc())

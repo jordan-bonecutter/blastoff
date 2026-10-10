@@ -8,7 +8,7 @@ A Spotlight-inspired application launcher for Linux: a rounded dark panel, real 
 cargo run --release --locked
 ```
 
-Type an app name or abbreviation (`vsc` matches Visual Studio Code). Use **↑/↓** to select and scroll through all matches; navigation stops at the first and last result. **Enter** to open, and **Escape** to dismiss. Click a result to launch it. The window also closes when it loses focus by default. A failed launch shows an error and keeps the launcher open.
+Type an app name or abbreviation (`vsc` matches Visual Studio Code). Use **↑/↓** to select and scroll through all matches; navigation stops at the first and last result. Press **Enter** to open the highlighted row, and **Escape** to dismiss. Moving the pointer over a result selects it, so Enter launches that same highlighted app. Arrow keys take over selection when used; scrolling does not reselect a row under a stationary pointer. Click a result to launch it. The window also closes when it loses focus by default. A failed launch shows an error and keeps the launcher open.
 
 Install with `cargo install --path . --locked`. Add these rules to your Sway config, using the full installed binary path in the binding if needed:
 
@@ -60,7 +60,7 @@ cargo clippy --locked --all-targets -- -D warnings
 ./tests/headless-ui.sh
 ```
 
-The UI harness requires a working Vulkan adapter in addition to `sway` built with the headless wlroots backend, `swaymsg`, `grim`, Python 3, `timeout`, and the system XKB keymap files (usually `xkeyboard-config`). Sway must support the virtual-keyboard protocol. These are **test tools**, not application dependencies. It does not require Xvfb, Xwayland, or a physical display. On machines without a GPU, install Mesa Lavapipe (Arch: `vulkan-swrast`), then run:
+The UI harness requires a working Vulkan adapter in addition to `sway` built with the headless wlroots backend, `swaymsg`, `grim`, Python 3, `timeout`, and the system XKB keymap files (usually `xkeyboard-config`). Sway must support the virtual-keyboard and virtual-pointer protocols. These are **test tools**, not application dependencies. It does not require Xvfb, Xwayland, or a physical display. On machines without a GPU, install Mesa Lavapipe (Arch: `vulkan-swrast`), then run:
 
 ```sh
 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./tests/headless-ui.sh
@@ -68,9 +68,9 @@ VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./tests/headless-ui.sh
 
 Use the ICD path for your distro if it differs. Lavapipe emulates the Vulkan adapter for tests; the application still exercises wgpu, never tiny-skia. On a desktop with a supported GPU, wgpu uses the normal Vulkan driver.
 
-The script builds Blastoff and test-only Rust virtual-keyboard, backdrop, and screenshot-check helpers, creates an isolated `/tmp/blastoff-ui.*` directory, replaces the XDG data/config/runtime directories, unsets the existing display/socket variables, and starts Sway with `WLR_BACKENDS=headless` and `WLR_RENDERER=pixman`. The compositor uses pixman while the launcher and backdrop use wgpu/Vulkan. It supplies deterministic desktop entries whose launch commands only create marker files. The input helper refuses to run unless `SWAYSOCK` belongs to that test directory.
+The script builds Blastoff and test-only Rust virtual-keyboard/pointer, backdrop, and screenshot-check helpers, creates an isolated `/tmp/blastoff-ui.*` directory, replaces the XDG data/config/runtime directories, unsets the existing display/socket variables, and starts Sway with `WLR_BACKENDS=headless` and `WLR_RENDERER=pixman`. The compositor uses pixman while the launcher and backdrop use wgpu/Vulkan. It supplies deterministic desktop entries whose launch commands only create marker files. The input helper refuses to run unless `SWAYSOCK` belongs to that test directory.
 
-Checks cover native Wayland window rendering, automatic search focus, Up/Down navigation with clamped ends, scrolling beyond the visible rows (both apps and search results), query scroll reset, and Enter launch, fuzzy search, Enter with no matches, Escape dismissal, and launch errors. A blue backdrop and pixel checks verify actual alpha blending, transparent rounded corners, and absence of black margins. The script exits nonzero on failure, limits the compositor to 90 seconds, and prints the artifact directory. Inspect `result`, `sway.log`, `launcher.log`, `input.log`, `backdrop.log`, and these screenshots:
+Checks cover native Wayland window rendering, automatic search focus, Up/Down navigation with clamped ends, scrolling beyond the visible rows (both apps and search results), query scroll reset, and Enter launch, fuzzy search, Enter with no matches, Escape dismissal, and launch errors. A blue backdrop and pixel checks verify actual alpha blending, transparent rounded corners, and absence of black margins or a panel outline. Tests also verify Enter launches the hovered row and keyboard scrolling retains selection with a stationary pointer. The script exits nonzero on failure, limits the compositor to 90 seconds, and prints the artifact directory. Inspect `result`, `sway.log`, `launcher.log`, `input.log`, `backdrop.log`, and these screenshots:
 
 - `01-initial.png`: icon rows and selection.
 - `00-down.png`: selection after keyboard navigation.
@@ -81,5 +81,7 @@ Checks cover native Wayland window rendering, automatic search focus, Up/Down na
 - `06-scroll-top.png`: navigation back to the first app.
 - `07-search-scroll.png`: the last match in a long search result list.
 - `08-query-reset.png`: a new query resets the scrolled viewport.
+- `09-hover-selection.png`: hovering Beta selects the target launched by Enter.
+- `10-keyboard-after-hover.png`: keyboard navigation scrolls to Gamma with the pointer stationary.
 
 Open screenshots with a file/image viewer; do not rerun the application on a live desktop for visual review. Artifacts are kept for inspection. The harness also requires distinct screenshots across states to catch stale rendering. Functional checks assert behavior; screenshot appearance needs visual inspection. This harness covers Wayland; the X11 backend is compiled but is not exercised by it. See [AGENTS.md](AGENTS.md) for persistent agent instructions.

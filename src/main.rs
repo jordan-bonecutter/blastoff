@@ -1,5 +1,6 @@
 mod config;
 mod desktop;
+mod hover;
 
 use config::{Config, parse_color};
 use desktop::App;
@@ -17,6 +18,7 @@ enum Message {
     Move(i32),
     Launch,
     Click(usize),
+    Hover(usize),
     Close,
     Focus(bool),
     Scrolled(scrollable::Viewport),
@@ -83,6 +85,11 @@ impl Launcher {
                 }
             }
             Message::Scrolled(viewport) => self.scroll_offset = viewport.absolute_offset().y,
+            Message::Hover(index) => {
+                if index < self.results.len() {
+                    self.selected = index;
+                }
+            }
             Message::Click(index) => {
                 self.selected = index;
                 return self.update(Message::Launch);
@@ -218,17 +225,15 @@ impl Launcher {
             ]
             .spacing(14)
             .align_y(Alignment::Center);
-            entries = entries.push(
+            entries = entries.push(hover::row(
                 button(content)
                     .on_press(Message::Click(position))
                     .width(Length::Fill)
                     .height(66)
                     .padding([10, 14])
-                    .style(move |_, status| button::Style {
+                    .style(move |_, _| button::Style {
                         background: Some(Background::Color(if selected {
                             Color { a: 0.16, ..accent }
-                        } else if matches!(status, button::Status::Hovered) {
-                            Color { a: 0.05, ..fg }
                         } else {
                             Color::TRANSPARENT
                         })),
@@ -239,7 +244,8 @@ impl Launcher {
                         },
                         ..Default::default()
                     }),
-            );
+                Message::Hover(position),
+            ));
         }
         let list: Element<'_, Message> = if self.results.is_empty() {
             container(
@@ -288,9 +294,8 @@ impl Launcher {
                 background: Some(Background::Color(bg)),
                 text_color: Some(fg),
                 border: Border {
-                    color: Color { a: 0.12, ..fg },
-                    width: 1.0,
                     radius: self.config.radius.into(),
+                    ..Border::default()
                 },
                 ..Default::default()
             });

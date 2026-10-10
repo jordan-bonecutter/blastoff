@@ -153,6 +153,7 @@ dependencies = [
  "toml",
  "wayland-client",
  "wayland-protocols-misc",
+ "wayland-protocols-wlr",
  "wgpu",
 ]
 

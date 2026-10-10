@@ -6,7 +6,7 @@ description = "A quiet, Spotlight-inspired application launcher for Linux"
 license = "MIT"
 
 [dependencies]
-iced = { version = "0.14", default-features = false, features = ["wgpu-bare", "wayland", "x11", "image-without-codecs", "svg", "thread-pool", "basic-shaping"] }
+iced = { version = "0.14", default-features = false, features = ["wgpu-bare", "advanced", "wayland", "x11", "image-without-codecs", "svg", "thread-pool", "basic-shaping"] }
 wgpu = { version = "27", default-features = false, features = ["std", "vulkan", "wgsl"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico"] }
 serde = { version = "1", features = ["derive"] }
@@ -19,4 +19,4 @@ strip = true
 [dev-dependencies]
 wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
-
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

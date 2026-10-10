@@ -1,4 +1,4 @@
-//! Test-only Wayland virtual keyboard. Use exclusively with tests/headless-ui.sh.
+//! Test-only Wayland virtual keyboard and pointer. Use exclusively with tests/headless-ui.sh.
 use std::{
     fs::File,
     io::{BufRead, Write},
@@ -13,6 +13,10 @@ use wayland_client::{
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
     zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+};
+use wayland_protocols_wlr::virtual_pointer::v1::client::{
+    zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
+    zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
 };
 struct State;
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
@@ -29,6 +33,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
 delegate_noop!(State: ignore wl_seat::WlSeat);
 delegate_noop!(State: ZwpVirtualKeyboardManagerV1);
 delegate_noop!(State: ZwpVirtualKeyboardV1);
+delegate_noop!(State: ZwlrVirtualPointerManagerV1);
+delegate_noop!(State: ZwlrVirtualPointerV1);
 fn code(key: &str) -> u32 {
     match key {
         "Down" => 108,
@@ -85,6 +91,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let qh = queue.handle();
     let seat: wl_seat::WlSeat = globals.bind(&qh, 1..=1, ())?;
     let manager: ZwpVirtualKeyboardManagerV1 = globals.bind(&qh, 1..=1, ())?;
+    let pointer_manager: ZwlrVirtualPointerManagerV1 = globals.bind(&qh, 1..=1, ())?;
+    let pointer = pointer_manager.create_virtual_pointer(Some(&seat), &qh, ());
+    pointer.motion_absolute(0, 0, 0, 1280, 960);
+    pointer.frame();
     let keyboard = manager.create_virtual_keyboard(&seat, &qh, ());
     let keymap = b"xkb_keymap { xkb_keycodes { include \"evdev+aliases(qwerty)\" }; xkb_types { include \"complete\" }; xkb_compatibility { include \"complete\" }; xkb_symbols { include \"pc+us+inet(evdev)\" }; };\0";
     let mut file = File::create(format!("{dir}/keymap"))?;
@@ -100,6 +110,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::io::stdout().flush()?;
     for line in std::io::stdin().lock().lines() {
         for arg in line?.split_whitespace() {
+            if let Some(coords) = arg.strip_prefix("pointer:") {
+                let (x, y) = coords.split_once(',').ok_or("pointer requires x,y")?;
+                pointer.motion_absolute(0, x.parse()?, y.parse()?, 1280, 960);
+                pointer.frame();
+                queue.roundtrip(&mut State)?;
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
             let keys: Vec<String> = if let Some(value) = arg.strip_prefix("text:") {
                 value.chars().map(|c| c.to_string()).collect()
             } else {
@@ -117,6 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("DONE");
         std::io::stdout().flush()?;
     }
+    pointer.destroy();
     keyboard.destroy();
     conn.flush()?;
     Ok(())

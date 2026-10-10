@@ -24,7 +24,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     // The 92% panel blends with the blue backdrop, including right up to its edges.
-    for (dx, dy) in [(width / 2, 3), (3, height / 2), (width - 4, height / 2)] {
+    for (dx, dy) in [
+        (width / 2, 0),
+        (0, height / 2),
+        (width - 1, height / 2),
+        (width / 2, height - 1),
+    ] {
         let pixel = screenshot.get_pixel(x + dx, y + dy).0;
         for (actual, expected) in pixel.into_iter().zip([27_u8, 34, 47]) {
             if actual.abs_diff(expected) > 2 {
