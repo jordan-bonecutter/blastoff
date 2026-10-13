@@ -195,7 +195,7 @@ try:
     node = windows()
     rect, content = node['rect'], node['window_rect']
     x = rect['x'] + content['x'] + 120
-    y = rect['y'] + content['y'] + 150 + 70 + 33
+    y = rect['y'] + content['y'] + 116 + 70 + 33
     key(f'pointer:{x},{y}')
     capture('09-hover-selection')
     key('Return')
@@ -211,7 +211,7 @@ try:
     node = windows()
     rect, content = node['rect'], node['window_rect']
     x = rect['x'] + content['x'] + 120
-    y = rect['y'] + content['y'] + 150 + 33
+    y = rect['y'] + content['y'] + 116 + 33
     key(f'pointer:{x},{y}')
     # Gamma is seventh: scrolling must not reselect a row beneath the stationary pointer.
     key(*(['Down'] * 6))

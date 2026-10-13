@@ -1,6 +1,9 @@
 mod config;
 mod desktop;
 mod hover;
+mod motion;
+
+use std::time::Instant;
 
 use config::{Config, parse_color};
 use desktop::App;
@@ -24,6 +27,8 @@ enum Message {
     Focus(bool),
     Scrolled(scrollable::Viewport),
     PrepareOverlay,
+    Frame(Instant),
+    Wheel(f32),
     MonitorSize(window::Id, Option<iced::Size>),
     Resized(iced::Size),
     Pointer(iced::Point),
@@ -45,6 +50,11 @@ struct Launcher {
     window_size: iced::Size,
     pointer: Option<iced::Point>,
     pointer_entered: bool,
+    appearance: f32,
+    closing: bool,
+    last_frame: Option<Instant>,
+    scroll_target: f32,
+    viewport_height: Option<f32>,
 }
 impl Launcher {
     fn boot(config: Config, button_launch: bool) -> (Self, Task<Message>) {
@@ -74,11 +84,19 @@ impl Launcher {
                 window_size,
                 pointer: None,
                 pointer_entered: false,
+                appearance: 0.0,
+                closing: false,
+                last_frame: None,
+                scroll_target: 0.0,
+                viewport_height: None,
             },
             Task::batch([iced::widget::operation::focus("search"), overlay]),
         )
     }
     fn update(&mut self, message: Message) -> Task<Message> {
+        if self.closing && !matches!(message, Message::Frame(_)) {
+            return Task::none();
+        }
         match message {
             Message::WindowEvent(id, event) => {
                 if (!self.button_launch || self.overlay_window == Some(id))
@@ -92,7 +110,9 @@ impl Launcher {
                 self.results = desktop::rank(&self.apps, &self.query);
                 self.selected = 0;
                 self.error = None;
+                self.viewport_height = None;
                 self.scroll_offset = 0.0;
+                self.scroll_target = 0.0;
                 return iced::widget::operation::scroll_to(
                     "results",
                     scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
@@ -104,21 +124,52 @@ impl Launcher {
                         .selected
                         .saturating_add_signed(delta as isize)
                         .min(self.results.len() - 1);
-                    let height = self.config.max_results as f32 * 70.0
-                        - 8.0
-                        - if self.error.is_some() { 32.0 } else { 0.0 };
-                    self.scroll_offset =
-                        selection_offset(self.selected, self.scroll_offset, height);
+                    self.scroll_target =
+                        selection_offset(self.selected, self.scroll_target, self.list_height())
+                            .min(self.max_scroll());
+                    return self.wake_animation();
+                }
+            }
+            Message::Scrolled(viewport) => {
+                self.viewport_height = Some(viewport.bounds().height);
+                let offset = viewport.absolute_offset().y;
+                // Redraw notifications also report our own animated operations.
+                // Only scrollbar/touch changes should replace the destination.
+                if (offset - self.scroll_offset).abs() > 0.5 {
+                    self.scroll_target = offset;
+                }
+                self.scroll_offset = offset;
+                self.scroll_target = self.scroll_target.min(self.max_scroll());
+            }
+            Message::Wheel(delta) => {
+                self.scroll_target = (self.scroll_target + delta).clamp(0.0, self.max_scroll());
+                return self.wake_animation();
+            }
+            Message::Frame(now) => {
+                if self.button_launch && !self.overlay_ready() {
+                    self.last_frame = None;
+                    return Task::none();
+                }
+                let dt = self
+                    .last_frame
+                    .map_or(1.0 / 60.0, |last| {
+                        now.saturating_duration_since(last).as_secs_f32()
+                    })
+                    .min(0.05);
+                self.last_frame = Some(now);
+                self.appearance = advance_appearance(self.appearance, self.closing, dt);
+                if self.closing && self.appearance == 0.0 {
+                    return iced::exit();
+                }
+                let offset = smooth_offset(self.scroll_offset, self.scroll_target, dt);
+                if offset != self.scroll_offset {
+                    self.scroll_offset = offset;
                     return iced::widget::operation::scroll_to(
                         "results",
-                        scrollable::AbsoluteOffset {
-                            x: 0.0,
-                            y: self.scroll_offset,
-                        },
+                        scrollable::AbsoluteOffset { x: 0.0, y: offset },
                     );
                 }
             }
-            Message::Scrolled(viewport) => self.scroll_offset = viewport.absolute_offset().y,
             Message::Hover(index) => {
                 if index < self.results.len() {
                     self.selected = index;
@@ -131,8 +182,18 @@ impl Launcher {
             Message::Launch => {
                 if let Some(&index) = self.results.get(self.selected) {
                     match self.apps[index].launch(&self.config) {
-                        Ok(()) => return iced::exit(),
-                        Err(e) => self.error = Some(e),
+                        Ok(()) => return self.dismiss(),
+                        Err(e) => {
+                            self.error = Some(e);
+                            self.viewport_height = None;
+                            self.scroll_target = selection_offset(
+                                self.selected,
+                                self.scroll_target,
+                                self.list_height(),
+                            )
+                            .min(self.max_scroll());
+                            return self.wake_animation();
+                        }
                     }
                 }
             }
@@ -146,7 +207,7 @@ impl Launcher {
             Message::MonitorSize(id, Some(size)) => {
                 if self.overlay_size.is_none() {
                     self.overlay_size = Some(size);
-                    let (overlay_id, open) = window::open(window_settings(size));
+                    let (overlay_id, open) = window::open(window_settings(size, self.config.blur));
                     self.overlay_window = Some(overlay_id);
                     return open.then(move |_| {
                         Task::batch([window::close(id), iced::widget::operation::focus("search")])
@@ -168,7 +229,7 @@ impl Launcher {
                     if self.pointer_inside() {
                         self.pointer_entered = true;
                     } else if self.pointer_entered {
-                        return iced::exit();
+                        return self.dismiss();
                     }
                 }
             }
@@ -180,20 +241,41 @@ impl Launcher {
             }
             Message::PointerPressed => {
                 if self.overlay_ready() && !self.pointer_inside() {
-                    return iced::exit();
+                    return self.dismiss();
                 }
             }
-            Message::Close => return iced::exit(),
+            Message::Close => return self.dismiss(),
             Message::Focus(focused) => {
                 if focused {
                     self.has_focused = true;
                     return iced::widget::operation::focus("search");
                 } else if !self.button_launch && self.has_focused && self.config.close_on_unfocus {
-                    return iced::exit();
+                    return self.dismiss();
                 }
             }
         }
         Task::none()
+    }
+    fn dismiss(&mut self) -> Task<Message> {
+        self.closing = true;
+        self.wake_animation()
+    }
+    fn wake_animation(&mut self) -> Task<Message> {
+        self.last_frame = None;
+        Task::done(Message::Frame(Instant::now()))
+    }
+    fn list_height(&self) -> f32 {
+        self.viewport_height.unwrap_or_else(|| {
+            panel_size(&self.config).height
+                - 48.0
+                - (26.0 * 1.3 + 28.0)
+                - 1.0
+                - 32.0
+                - if self.error.is_some() { 32.0 } else { 0.0 }
+        })
+    }
+    fn max_scroll(&self) -> f32 {
+        (self.results.len() as f32 * 70.0 - 4.0 - self.list_height()).max(0.0)
     }
     fn overlay_ready(&self) -> bool {
         self.button_launch && self.overlay_size == Some(self.window_size)
@@ -205,24 +287,33 @@ impl Launcher {
     }
     fn subscription(&self) -> Subscription<Message> {
         let events = event::listen_with(|event, _, id| Some(Message::WindowEvent(id, event)));
+        let animating =
+            self.appearance < 1.0 || self.closing || self.scroll_offset != self.scroll_target;
+        let mut subscriptions = vec![events];
         if self.button_launch && self.overlay_size.is_none() {
-            Subscription::batch([events, window::frames().map(|_| Message::PrepareOverlay)])
-        } else {
-            events
+            subscriptions.push(window::frames().map(|_| Message::PrepareOverlay));
         }
+        if animating {
+            subscriptions.push(window::frames().map(Message::Frame));
+        }
+        Subscription::batch(subscriptions)
     }
+
     fn view(&self) -> Element<'_, Message> {
         if self.button_launch && self.overlay_size.is_none() {
             return space().into();
         }
         let bg = Color {
-            a: self.config.opacity,
+            a: self.config.opacity * self.appearance,
             ..parse_color(&self.config.background).unwrap()
         };
-        let fg = parse_color(&self.config.foreground).unwrap();
-        let accent = parse_color(&self.config.accent).unwrap();
-        let muted = Color { a: 0.5, ..fg };
-        let search = text_input("Search applications…", &self.query)
+        let fg = fade(
+            parse_color(&self.config.foreground).unwrap(),
+            self.appearance,
+        );
+        let accent = fade(parse_color(&self.config.accent).unwrap(), self.appearance);
+        let muted = fade(fg, 0.5);
+        let search = text_input("", &self.query)
             .id("search")
             .on_input(Message::Query)
             .on_submit(Message::Launch)
@@ -234,27 +325,14 @@ impl Launcher {
                 icon: accent,
                 placeholder: muted,
                 value: fg,
-                selection: Color { a: 0.3, ..accent },
+                selection: fade(accent, 0.3),
             });
         let header = row![
-            svg(svg::Handle::from_memory(br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="13" cy="13" r="8" fill="none" stroke="#a5b4fc" stroke-width="2.2"/><path d="M19 19L27 27" fill="none" stroke="#a5b4fc" stroke-width="2.2" stroke-linecap="round"/></svg>"##.as_slice())).width(30).height(30).style(move |_, _| svg::Style { color: Some(accent) }),
+            svg(svg::Handle::from_memory(br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="13" cy="13" r="8" fill="none" stroke="#d4d4d4" stroke-width="2.2"/><path d="M19 19L27 27" fill="none" stroke="#d4d4d4" stroke-width="2.2" stroke-linecap="round"/></svg>"##.as_slice())).width(30).height(30).opacity(self.appearance).style(move |_, _| svg::Style { color: Some(accent) }),
             search
         ]
         .spacing(16)
         .align_y(Alignment::Center);
-        let heading = row![
-            text(if self.query.is_empty() {
-                "APPLICATIONS"
-            } else {
-                "RESULTS"
-            })
-            .size(11)
-            .color(muted),
-            space::horizontal(),
-            text(format!("{} apps", self.apps.len()))
-                .size(11)
-                .color(muted)
-        ];
         let mut entries = column![].spacing(4);
         for (position, &index) in self.results.iter().enumerate() {
             let app = &self.apps[index];
@@ -264,11 +342,14 @@ impl Launcher {
                     svg(svg::Handle::from_path(path))
                         .width(38)
                         .height(38)
+                        .opacity(self.appearance)
                         .into()
                 }
                 Some(path) => image(image::Handle::from_path(path))
+                    .filter_method(image::FilterMethod::Linear)
                     .width(38)
                     .height(38)
+                    .opacity(self.appearance)
                     .into(),
                 None => container(
                     text(app.name.chars().next().unwrap_or('?').to_string())
@@ -277,7 +358,7 @@ impl Launcher {
                 )
                 .center(38)
                 .style(move |_| container::Style {
-                    background: Some(Background::Color(Color { a: 0.12, ..accent })),
+                    background: Some(Background::Color(fade(accent, 0.12))),
                     border: Border {
                         radius: 10.0.into(),
                         ..Border::default()
@@ -304,8 +385,7 @@ impl Launcher {
                         .wrapping(text::Wrapping::None)
                 ]
                 .spacing(3)
-                .width(Length::Fill),
-                text(if selected { "↵" } else { "" }).size(20).color(accent)
+                .width(Length::Fill)
             ]
             .spacing(14)
             .align_y(Alignment::Center);
@@ -317,7 +397,7 @@ impl Launcher {
                     .padding([10, 14])
                     .style(move |_, _| button::Style {
                         background: Some(Background::Color(if selected {
-                            Color { a: 0.16, ..accent }
+                            fade(accent, 0.10)
                         } else {
                             Color::TRANSPARENT
                         })),
@@ -348,27 +428,66 @@ impl Launcher {
             .center(Length::Fill)
             .into()
         } else {
-            scrollable(entries)
-                .id("results")
-                .height(Length::Fill)
-                .direction(scrollable::Direction::Vertical(
-                    scrollable::Scrollbar::new()
-                        .width(6)
-                        .scroller_width(4)
-                        .spacing(8),
-                ))
-                .on_scroll(Message::Scrolled)
-                .into()
+            motion::smooth_scroll(
+                scrollable(entries)
+                    .id("results")
+                    .height(Length::Fill)
+                    .direction(scrollable::Direction::Vertical(
+                        scrollable::Scrollbar::new()
+                            .width(6)
+                            .scroller_width(4)
+                            .spacing(8),
+                    ))
+                    .on_scroll(Message::Scrolled)
+                    .style(move |_, _| scrollable::Style {
+                        container: container::Style::default(),
+                        vertical_rail: scrollable::Rail {
+                            background: None,
+                            border: Border::default(),
+                            scroller: scrollable::Scroller {
+                                background: Background::Color(fade(fg, 0.18)),
+                                border: Border {
+                                    radius: 2.0.into(),
+                                    ..Border::default()
+                                },
+                            },
+                        },
+                        horizontal_rail: scrollable::Rail {
+                            background: None,
+                            border: Border::default(),
+                            scroller: scrollable::Scroller {
+                                background: Background::Color(Color::TRANSPARENT),
+                                border: Border::default(),
+                            },
+                        },
+                        gap: None,
+                        auto_scroll: scrollable::AutoScroll {
+                            background: Background::Color(Color::TRANSPARENT),
+                            border: Border::default(),
+                            shadow: iced::Shadow::default(),
+                            icon: Color::TRANSPARENT,
+                        },
+                    }),
+                Message::Wheel,
+            )
         };
         let mut body = column![
             header,
-            rule::horizontal(1),
-            heading,
+            rule::horizontal(1).style(move |_| rule::Style {
+                color: fade(fg, 0.08),
+                radius: 0.0.into(),
+                fill_mode: rule::FillMode::Full,
+                snap: true,
+            }),
             container(list).height(Length::Fill)
         ]
         .spacing(16);
         if let Some(error) = &self.error {
-            body = body.push(text(error).size(12).color(Color::from_rgb8(255, 150, 150)));
+            body = body.push(
+                text(error)
+                    .size(12)
+                    .color(fade(Color::from_rgb8(255, 150, 150), self.appearance)),
+            );
         }
         let panel = container(body)
             .padding(24)
@@ -385,11 +504,14 @@ impl Launcher {
             });
         if self.button_launch {
             let size = panel_size(&self.config);
-            container(panel.width(size.width).height(size.height))
-                .center(Length::Fill)
-                .into()
+            container(motion::scale(
+                panel.width(size.width).height(size.height),
+                appearance_scale(self.appearance),
+            ))
+            .center(Length::Fill)
+            .into()
         } else {
-            panel.into()
+            motion::scale(panel, appearance_scale(self.appearance))
         }
     }
 }
@@ -421,19 +543,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let size = panel_size(&config);
+    let blur = config.blur;
     iced::application(
         move || Launcher::boot(config.clone(), button_launch),
         Launcher::update,
         Launcher::view,
     )
     .title("Blastoff")
+    .antialiasing(true)
     .theme(Theme::Dark)
     .style(|_, _| iced::theme::Style {
         background_color: Color::TRANSPARENT,
         text_color: Color::WHITE,
     })
     .subscription(Launcher::subscription)
-    .window(window_settings(size))
+    .window(window_settings(size, blur))
     .run()?;
     Ok(())
 }
@@ -463,12 +587,13 @@ fn input_message(event: iced::Event) -> Option<Message> {
     }
 }
 
-fn window_settings(size: iced::Size) -> window::Settings {
+fn window_settings(size: iced::Size, blur: bool) -> window::Settings {
     window::Settings {
         size,
         position: window::Position::Centered,
         decorations: false,
         transparent: true,
+        blur,
         resizable: false,
         level: window::Level::AlwaysOnTop,
         platform_specific: window::settings::PlatformSpecific {
@@ -502,6 +627,27 @@ fn selection_offset(selected: usize, offset: f32, height: f32) -> f32 {
     }
 }
 
+fn fade(color: Color, opacity: f32) -> Color {
+    Color {
+        a: color.a * opacity,
+        ..color
+    }
+}
+fn advance_appearance(value: f32, closing: bool, dt: f32) -> f32 {
+    (value + if closing { -dt / 0.075 } else { dt / 0.10 }).clamp(0.0, 1.0)
+}
+fn appearance_scale(appearance: f32) -> f32 {
+    // Ease out over just 1.2% of the panel size.
+    1.0 - 0.012 * (1.0 - appearance).powi(3)
+}
+fn smooth_offset(offset: f32, target: f32, dt: f32) -> f32 {
+    if (offset - target).abs() < 0.5 {
+        target
+    } else {
+        offset + (target - offset) * (1.0 - (-32.0 * dt).exp())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,6 +672,11 @@ mod tests {
             window_size: size,
             pointer: None,
             pointer_entered: false,
+            appearance: 1.0,
+            closing: false,
+            last_frame: None,
+            scroll_target: 0.0,
+            viewport_height: None,
         }
     }
 
@@ -561,6 +712,9 @@ mod tests {
         let mut launcher = dismissal_launcher(true, false);
         let _ = launcher.update(Message::Pointer(iced::Point::new(20.0, 20.0)));
         assert!(launcher.update(Message::PointerPressed).units() > 0);
+        assert!(launcher.closing);
+        assert_eq!(launcher.update(Message::Close).units(), 0);
+        let mut launcher = dismissal_launcher(true, false);
         assert!(launcher.update(Message::Close).units() > 0);
         let _ = launcher.update(Message::Pointer(iced::Point::new(420.0, 320.0)));
         assert_eq!(launcher.update(Message::PointerLeft).units(), 0);
@@ -651,6 +805,51 @@ mod tests {
                 .units()
                 > 0
         );
+    }
+
+    #[test]
+    fn animation_settles_and_dismissal_reaches_zero() {
+        let mut appearance = 0.0;
+        for _ in 0..20 {
+            appearance = advance_appearance(appearance, false, 1.0 / 60.0);
+        }
+        assert_eq!(appearance, 1.0);
+        assert_eq!(appearance_scale(appearance), 1.0);
+        assert!((appearance_scale(0.0) - 0.988).abs() < 0.0001);
+        for _ in 0..20 {
+            appearance = advance_appearance(appearance, true, 1.0 / 60.0);
+        }
+        assert_eq!(appearance, 0.0);
+        let mut offset = 0.0;
+        for _ in 0..30 {
+            let next = smooth_offset(offset, 140.0, 1.0 / 60.0);
+            assert!(next > offset && next <= 140.0 || next == 140.0);
+            offset = next;
+        }
+        assert_eq!(offset, 140.0);
+        assert!(smooth_offset(140.0, 0.0, 1.0 / 60.0) < 140.0);
+    }
+
+    #[test]
+    fn wheel_scrolling_accumulates_reverses_and_clamps() {
+        let mut launcher = dismissal_launcher(false, false);
+        launcher.results = (0..20).collect();
+        let _ = launcher.update(Message::Wheel(42.0));
+        let _ = launcher.update(Message::Wheel(42.0));
+        assert_eq!(launcher.scroll_target, 84.0);
+        assert_eq!(launcher.scroll_offset, 0.0);
+        let _ = launcher.update(Message::Frame(Instant::now()));
+        assert!(launcher.scroll_offset > 0.0 && launcher.scroll_offset < 84.0);
+        let _ = launcher.update(Message::Wheel(-42.0));
+        assert_eq!(launcher.scroll_target, 42.0);
+        let _ = launcher.update(Message::Wheel(f32::MAX));
+        assert_eq!(launcher.scroll_target, launcher.max_scroll());
+        let _ = launcher.update(Message::Wheel(-f32::MAX));
+        assert_eq!(launcher.scroll_target, 0.0);
+        let _ = launcher.update(Message::Close);
+        let offset = launcher.scroll_target;
+        let _ = launcher.update(Message::Wheel(42.0));
+        assert_eq!(launcher.scroll_target, offset);
     }
 
     #[test]

@@ -102,7 +102,12 @@ fn parse(s: &str, path: PathBuf, id: String, desktops: &[String]) -> Option<App>
     if get("Type") != "Application" || get("Hidden") == "true" || get("NoDisplay") == "true" {
         return None;
     }
-    let matches = |value: &str| value.split(';').any(|d| desktops.iter().any(|s| s == d));
+    let matches = |value: &str| {
+        value
+            .split(';')
+            .filter(|d| !d.is_empty())
+            .any(|d| desktops.iter().any(|s| s == d))
+    };
     if (!get("OnlyShowIn").is_empty() && !matches(get("OnlyShowIn"))) || matches(get("NotShowIn")) {
         return None;
     }
@@ -593,6 +598,29 @@ mod tests {
                 .is_none()
             );
         }
+    }
+    #[test]
+    fn unset_desktop_does_not_hide_unrestricted_apps() {
+        for extra in ["", "NotShowIn=", "NotShowIn=GNOME;", "OnlyShowIn="] {
+            assert!(
+                parse(
+                    &format!("[Desktop Entry]\nType=Application\nName=A\nExec=a\n{extra}"),
+                    "a.desktop".into(),
+                    "a".into(),
+                    &[String::new()]
+                )
+                .is_some()
+            );
+        }
+        assert!(
+            parse(
+                "[Desktop Entry]\nType=Application\nName=A\nExec=a\nOnlyShowIn=GNOME;",
+                "a.desktop".into(),
+                "a".into(),
+                &[String::new()]
+            )
+            .is_none()
+        );
     }
     #[test]
     fn actions_do_not_override_main_entry() {

@@ -1,6 +1,6 @@
 # Blastoff
 
-A Spotlight-inspired application launcher for Linux: a rounded dark panel, real app icons, fuzzy search, and keyboard navigation. Built in Rust with Iced and the wgpu Vulkan renderer. No GTK, Qt, or webview. The translucent panel shows your desktop through it. A working Vulkan driver is required; there is no tiny-skia fallback.
+A Spotlight-inspired application launcher for Linux: a rounded neutral charcoal panel, real app icons, fuzzy search, and keyboard navigation. Built in Rust with Iced and the wgpu Vulkan renderer. No GTK, Qt, or webview. The translucent panel shows your desktop through it, with a subtle 1.2% scale-up and 100 ms fade on opening, a 75 ms fade on dismissal, and eased wheel/keyboard scrolling. Renderer antialiasing and linear bitmap filtering keep icon edges smooth. A working Vulkan driver is required; there is no tiny-skia fallback.
 
 ## Run
 
@@ -19,7 +19,7 @@ for_window [app_id="blastoff"] floating enable, border none, move position cente
 bindsym $mod+space exec ~/.cargo/bin/blastoff
 ```
 
-On Wayland, your compositor controls positioning; the floating rule is required on tiling compositors. Blastoff currently uses a regular window, not the layer-shell protocol. The window supports true alpha transparency and rounded corners. Background blur needs compositor support and is not implemented here. It starts a fresh process for each invocation; it does not register a global shortcut itself.
+On Wayland, your compositor controls positioning; the floating rule is required on tiling compositors. Blastoff currently uses a regular window, not the layer-shell protocol. The window supports true alpha transparency and rounded corners. `blur = true` requests native background blur through Iced/winit. On Wayland this requires the `org_kde_kwin_blur_manager` protocol (for example KWin); unsupported compositors and X11 keep normal transparency. See [winit’s blur support](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html#method.set_blur). Compositors with their own blur effects may need a rule for `app_id="blastoff"`. In button-launch mode the native request covers the monitor-sized surface; use `blur = false` if you want to avoid blur across that input surface. It starts a fresh process for each invocation; it does not register a global shortcut itself.
 
 ## Configure
 
@@ -31,15 +31,16 @@ max_results = 7
 font_size = 17.0
 radius = 20.0
 opacity = 0.92
-background = "#181b24"
-foreground = "#eef0f7"
-accent = "#a5b4fc"
+blur = true
+background = "#202020"
+foreground = "#eeeeee"
+accent = "#d4d4d4"
 icon_theme = "Adwaita"
 terminal = ["foot", "-e"]
 close_on_unfocus = true
 ```
 
-Colors use `#RRGGBB`. Width is 400–1400 logical pixels; results 1–12; font size 12–28; corner radius 0–40. `opacity` ranges from 0 to 1 (default 0.92); 1 makes the panel opaque. Width describes the complete window, without an outer margin. `max_results` controls the visible row count, not the total number of matches. `terminal` is an executable and argument array, used for desktop entries with `Terminal=true`.
+Colors use `#RRGGBB`. Width is 400–1400 logical pixels; results 1–12; font size 12–28; corner radius 0–40. `opacity` ranges from 0 to 1 (default 0.92); 1 makes the panel opaque. `blur` defaults to true; set it to false to disable the native blur request. Explicit configured colors still override the neutral defaults. Width describes the complete window, without an outer margin. `max_results` controls the visible row count, not the total number of matches. `terminal` is an executable and argument array, used for desktop entries with `Terminal=true`.
 
 Use `blastoff --config PATH` to select another config, `blastoff --list` to inspect discovered applications without opening a window, or `blastoff --help` for usage. Invalid configuration reports an error rather than silently discarding your settings.
 
@@ -72,7 +73,7 @@ Use the ICD path for your distro if it differs. Lavapipe emulates the Vulkan ada
 
 The script builds Blastoff and test-only Rust virtual-keyboard/pointer, backdrop, and screenshot-check helpers, creates an isolated `/tmp/blastoff-ui.*` directory, replaces the XDG data/config/runtime directories, unsets the existing display/socket variables, and starts Sway with `WLR_BACKENDS=headless` and `WLR_RENDERER=pixman`. The compositor uses pixman while the launcher and backdrop use wgpu/Vulkan. It supplies deterministic desktop entries whose launch commands only create marker files. The input helper refuses to run unless `SWAYSOCK` belongs to that test directory.
 
-Checks cover native Wayland window rendering, automatic search focus, Up/Down navigation with clamped ends, scrolling beyond the visible rows (both apps and search results), query scroll reset, and Enter launch, fuzzy search, Enter with no matches, Escape dismissal, and launch errors. A blue backdrop and pixel checks verify actual alpha blending, transparent rounded corners, and absence of black margins or a panel outline. Twelve repeated button launches exercise startup with a populated clipboard and the pointer initially inside or outside the panel. Paste/Enter verifies that the clipboard remains usable. Switching focus to another window with a stationary pointer must keep button-launch mode open. A clipboard fixture stays populated during button launches, and launcher logs must contain no Wayland protocol errors. Tests also verify button-launch dismissal by outside click, pointer entry/exit, and Escape, clicks inside search staying open, search/Enter and app clicks in button-launch mode, and default focus-loss dismissal. Enter launches the hovered row and keyboard scrolling retains selection with a stationary pointer. The script exits nonzero on failure, limits the compositor to 120 seconds, and prints the artifact directory. Inspect `result`, `sway.log`, `launcher.log`, `input.log`, `backdrop.log`, and these screenshots:
+Checks cover native Wayland window rendering, automatic search focus, Up/Down navigation with clamped ends, scrolling beyond the visible rows (both apps and search results), query scroll reset, and Enter launch, fuzzy search, Enter with no matches, Escape dismissal, and launch errors. A blue backdrop and pixel checks verify the neutral palette’s actual alpha blending, transparent rounded corners, and absence of black margins or a panel outline. Twelve repeated button launches exercise startup with a populated clipboard and the pointer initially inside or outside the panel. Paste/Enter verifies that the clipboard remains usable. Switching focus to another window with a stationary pointer must keep button-launch mode open. A clipboard fixture stays populated during button launches, and launcher logs must contain no Wayland protocol errors. Tests also verify button-launch dismissal by outside click, pointer entry/exit, and Escape, clicks inside search staying open, search/Enter and app clicks in button-launch mode, and default focus-loss dismissal. Enter launches the hovered row and keyboard scrolling retains selection with a stationary pointer. The script exits nonzero on failure, limits the compositor to 120 seconds, and prints the artifact directory. Inspect `result`, `sway.log`, `launcher.log`, `input.log`, `backdrop.log`, and these screenshots:
 
 - `01-initial.png`: icon rows and selection.
 - `00-down.png`: selection after keyboard navigation.
@@ -88,4 +89,4 @@ Checks cover native Wayland window rendering, automatic search focus, Up/Down na
 - `11-button-launch.png`: centered panel with a transparent input surface across the monitor.
 - `12-clipboard-startup.png`: the same appearance during startup with a populated clipboard.
 
-Open screenshots with a file/image viewer; do not rerun the application on a live desktop for visual review. Artifacts are kept for inspection. The harness also requires distinct screenshots across states to catch stale rendering. Functional checks assert behavior; screenshot appearance needs visual inspection. This harness covers Wayland; the X11 backend is compiled but is not exercised by it. See [AGENTS.md](AGENTS.md) for persistent agent instructions.
+Open screenshots with a file/image viewer; do not rerun the application on a live desktop for visual review. Artifacts are kept for inspection. The harness also requires distinct screenshots across states to catch stale rendering. Functional checks assert behavior; screenshot appearance needs visual inspection. Stock Sway in this harness does not implement the native blur protocol, so compositor blur is not covered by these checks. This harness covers Wayland; the X11 backend is compiled but is not exercised by it. See [AGENTS.md](AGENTS.md) for persistent agent instructions.

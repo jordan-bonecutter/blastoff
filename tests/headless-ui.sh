@@ -17,7 +17,7 @@ export XDG_DATA_DIRS="$BLASTOFF_TEST_DIR/empty"
 export XDG_CONFIG_HOME="$BLASTOFF_TEST_DIR/config"
 mkdir -p "$XDG_DATA_HOME/applications" "$XDG_DATA_HOME/icons/hicolor/scalable/apps" "$XDG_DATA_DIRS" "$XDG_CONFIG_HOME"
 cat > "$XDG_DATA_HOME/icons/hicolor/scalable/apps/fixture.svg" <<'SVG'
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#a5b4fc"/><path d="M14 32L24 12L34 32H14Z" fill="#181b24"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#d4d4d4"/><path d="M14 32L24 12L34 32H14Z" fill="#202020"/></svg>
 SVG
 for name in Alpha Beta Gamma Delta Epsilon Eta Iota Kappa Lambda Omega; do
     lower="${name,,}"

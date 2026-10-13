@@ -5,9 +5,11 @@ font_size = 17.0
 radius = 20.0
 # 1 = opaque; lower values show more of the desktop.
 opacity = 0.92
-background = "#181b24"
-foreground = "#eef0f7"
-accent = "#a5b4fc"
+# Request native backdrop blur where the compositor supports it.
+blur = true
+background = "#202020"
+foreground = "#eeeeee"
+accent = "#d4d4d4"
 icon_theme = "Adwaita"
 terminal = ["foot", "-e"]
 close_on_unfocus = true
